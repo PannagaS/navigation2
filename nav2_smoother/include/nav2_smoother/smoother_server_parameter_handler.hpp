@@ -32,12 +32,14 @@ namespace nav2_smoother
 
 /**
  * @struct nav2_smoother::SmootherServerParameters
- * @brief Parameters for the SmootherServer
+ * @brief Parameters for the SmootherServer.
+ * None of these are dynamically reconfigurable: the costmap and footprint
+ * subscribers and the collision checker are built from them at configure time
+ * and handed to the plugins, so changing them requires a reconfigure.
  */
 struct SmootherServerParameters
 {
-  // Topic of the costmap used by the collision checker and passed to the plugins.
-  // Not dynamically reconfigurable: plugins hold the subscriber created at configure time.
+  // Topic of the costmap used by the collision checker and passed to the plugins
   std::string costmap_topic;
   // Topic of the robot footprint used by the collision checker
   std::string footprint_topic;
@@ -45,14 +47,14 @@ struct SmootherServerParameters
   std::string robot_base_frame;
   // Tolerance in seconds for footprint transform lookups
   double transform_tolerance;
-  // Names of the smoother plugin instances to load.
-  // Not dynamically reconfigurable: changing plugins requires a reconfigure.
+  // Names of the smoother plugin instances to load
   std::vector<std::string> smoother_plugins;
 };
 
 /**
  * @class nav2_smoother::SmootherServerParameterHandler
- * @brief Handles parameters and dynamic parameters for the SmootherServer
+ * @brief Declares the SmootherServer parameters and rejects runtime changes to them.
+ * Plugin parameters (names containing a '.') are left to the plugins' own callbacks.
  */
 class SmootherServerParameterHandler : public nav2_util::ParameterHandler<SmootherServerParameters>
 {
@@ -69,17 +71,16 @@ public:
 protected:
   /**
    * @brief Apply parameter updates after validation
-   * This callback is executed when parameters have been successfully updated.
-   * It updates the internal configuration with the new parameter values.
+   * No server parameter is reconfigurable, so this has nothing to apply; it exists
+   * to satisfy the nav2_util::ParameterHandler interface.
    * @param parameters List of parameters that have been updated.
    */
   void updateParametersCallback(const std::vector<rclcpp::Parameter> & parameters) override;
 
   /**
    * @brief Validate incoming parameter updates before applying them.
-   * This callback is triggered when one or more parameters are about to be updated.
-   * It checks the validity of parameter values and rejects updates that would lead
-   * to invalid or inconsistent configurations
+   * Rejects any change to a SmootherServer parameter, since all of them feed
+   * objects created at configure time. Other node-level parameters pass through.
    * @param parameters List of parameters that are being updated.
    * @return Result indicating whether the update is accepted.
    */

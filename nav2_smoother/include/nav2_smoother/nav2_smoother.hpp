@@ -152,12 +152,6 @@ protected:
    */
   bool validate(const nav_msgs::msg::Path & path);
 
-  /**
-   * @brief Recreate the footprint subscriber and collision checker if the
-   * footprint parameters have changed since they were last built
-   */
-  void updateFootprintSubscriber();
-
   // Our action server implements the SmoothPath action
   typename ActionServer::SharedPtr action_server_;
 
@@ -173,7 +167,6 @@ protected:
   SmootherMap smoothers_;
   std::vector<std::string> default_ids_;
   std::vector<std::string> default_types_;
-  std::vector<std::string> smoother_ids_;
   std::vector<std::string> smoother_types_;
   std::string smoother_ids_concat_, current_smoother_;
 
@@ -185,9 +178,6 @@ protected:
   // Parameters
   SmootherServerParameters * params_;
   std::unique_ptr<SmootherServerParameterHandler> param_handler_;
-  // Values the current footprint subscriber was built with, to detect live changes
-  std::string footprint_topic_, robot_base_frame_;
-  double transform_tolerance_;
 };
 
 }  // namespace nav2_smoother

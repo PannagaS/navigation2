@@ -20,7 +20,6 @@
 namespace nav2_smoother
 {
 
-using rcl_interfaces::msg::ParameterType;
 
 SmootherServerParameterHandler::SmootherServerParameterHandler(
   const nav2::LifecycleNode::SharedPtr & node,
@@ -45,43 +44,21 @@ SmootherServerParameterHandler::validateParameterUpdatesCallback(
   rcl_interfaces::msg::SetParametersResult result;
   result.successful = true;
   for (const auto & parameter : parameters) {
-    const auto & param_type = parameter.get_type();
     const auto & param_name = parameter.get_name();
-    // Parameters containing a '.' belong to a plugin and are handled by its own handler
+    // Parameters containing a '.' belong to a plugin and are handled by its own callbacks
     if (param_name.find('.') != std::string::npos) {
       continue;
     }
-    if (!mutex_.try_lock()) {
-      RCLCPP_WARN(
-        logger_, "Unable to change parameter '%s' while smoothing is in progress. "
-        "Rejecting update.", param_name.c_str());
-      result.successful = false;
-      return result;
-    }
-    mutex_.unlock();
-    if (param_name == "costmap_topic" || param_name == "smoother_plugins") {
+    const bool is_server_param =
+      param_name == "costmap_topic" || param_name == "footprint_topic" ||
+      param_name == "robot_base_frame" || param_name == "transform_tolerance" ||
+      param_name == "smoother_plugins";
+    if (is_server_param) {
       RCLCPP_WARN(
         logger_, "The parameter '%s' cannot be changed at runtime; it requires the "
         "smoother server to be reconfigured. Ignoring parameter update.",
         param_name.c_str());
       result.successful = false;
-    } else if (param_type == ParameterType::PARAMETER_DOUBLE) {
-      if (param_name == "transform_tolerance" && parameter.as_double() < 0.0) {
-        RCLCPP_WARN(
-          logger_, "The value of parameter '%s' is incorrectly set to %f, "
-          "it should be >=0. Ignoring parameter update.",
-          param_name.c_str(), parameter.as_double());
-        result.successful = false;
-      }
-    } else if (param_type == ParameterType::PARAMETER_STRING) {
-      const bool is_footprint_param =
-        param_name == "footprint_topic" || param_name == "robot_base_frame";
-      if (is_footprint_param && parameter.as_string().empty()) {
-        RCLCPP_WARN(
-          logger_, "The value of parameter '%s' is empty, it should be a valid name. "
-          "Ignoring parameter update.", param_name.c_str());
-        result.successful = false;
-      }
     }
   }
   return result;
@@ -89,28 +66,9 @@ SmootherServerParameterHandler::validateParameterUpdatesCallback(
 
 void
 SmootherServerParameterHandler::updateParametersCallback(
-  const std::vector<rclcpp::Parameter> & parameters)
+  const std::vector<rclcpp::Parameter> & /*parameters*/)
 {
-  std::lock_guard<std::mutex> lock_reinit(mutex_);
-
-  for (const auto & parameter : parameters) {
-    const auto & param_type = parameter.get_type();
-    const auto & param_name = parameter.get_name();
-    if (param_name.find('.') != std::string::npos) {
-      continue;
-    }
-    if (param_type == ParameterType::PARAMETER_DOUBLE) {
-      if (param_name == "transform_tolerance") {
-        params_.transform_tolerance = parameter.as_double();
-      }
-    } else if (param_type == ParameterType::PARAMETER_STRING) {
-      if (param_name == "footprint_topic") {
-        params_.footprint_topic = parameter.as_string();
-      } else if (param_name == "robot_base_frame") {
-        params_.robot_base_frame = parameter.as_string();
-      }
-    }
-  }
+  // Nothing to apply: every SmootherServer parameter is rejected in validation
 }
 
 }  // namespace nav2_smoother

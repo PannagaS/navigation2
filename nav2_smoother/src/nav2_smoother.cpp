@@ -54,9 +54,8 @@ SmootherServer::on_configure(const rclcpp_lifecycle::State & state)
   auto logger = get_logger();
   param_handler_ = std::make_unique<SmootherServerParameterHandler>(node, logger);
   params_ = param_handler_->getParams();
-  smoother_ids_ = params_->smoother_plugins;
 
-  if (smoother_ids_ == default_ids_) {
+  if (params_->smoother_plugins == default_ids_) {
     for (size_t i = 0; i < default_ids_.size(); ++i) {
       nav2::declare_parameter_if_not_declared(
         node, default_ids_[i] + ".plugin",
@@ -69,11 +68,9 @@ SmootherServer::on_configure(const rclcpp_lifecycle::State & state)
 
   costmap_sub_ = std::make_shared<nav2_costmap_2d::CostmapSubscriber>(
     shared_from_this(), params_->costmap_topic);
-  footprint_topic_ = params_->footprint_topic;
-  robot_base_frame_ = params_->robot_base_frame;
-  transform_tolerance_ = params_->transform_tolerance;
   footprint_sub_ = std::make_shared<nav2_costmap_2d::FootprintSubscriber>(
-    shared_from_this(), footprint_topic_, *tf_, robot_base_frame_, transform_tolerance_);
+    shared_from_this(), params_->footprint_topic, *tf_, params_->robot_base_frame,
+    params_->transform_tolerance);
 
   collision_checker_ =
     std::make_shared<nav2_costmap_2d::CostmapTopicCollisionChecker>(
@@ -103,21 +100,21 @@ bool SmootherServer::loadSmootherPlugins()
 {
   auto node = shared_from_this();
 
-  smoother_types_.resize(smoother_ids_.size());
+  smoother_types_.resize(params_->smoother_plugins.size());
 
-  for (size_t i = 0; i != smoother_ids_.size(); i++) {
+  for (size_t i = 0; i != params_->smoother_plugins.size(); i++) {
     try {
       smoother_types_[i] =
-        nav2::get_plugin_type_param(node, smoother_ids_[i]);
+        nav2::get_plugin_type_param(node, params_->smoother_plugins[i]);
       nav2_core::Smoother::Ptr smoother =
         lp_loader_.createUniqueInstance(smoother_types_[i]);
       RCLCPP_INFO(
         get_logger(), "Created smoother : %s of type %s",
-        smoother_ids_[i].c_str(), smoother_types_[i].c_str());
+        params_->smoother_plugins[i].c_str(), smoother_types_[i].c_str());
       smoother->configure(
-        node, smoother_ids_[i], tf_, costmap_sub_,
+        node, params_->smoother_plugins[i], tf_, costmap_sub_,
         footprint_sub_);
-      smoothers_.insert({smoother_ids_[i], smoother});
+      smoothers_.insert({params_->smoother_plugins[i], smoother});
     } catch (const std::exception & ex) {
       RCLCPP_FATAL(
         get_logger(), "Failed to create smoother. Exception: %s",
@@ -126,8 +123,8 @@ bool SmootherServer::loadSmootherPlugins()
     }
   }
 
-  for (size_t i = 0; i != smoother_ids_.size(); i++) {
-    smoother_ids_concat_ += smoother_ids_[i] + std::string(" ");
+  for (size_t i = 0; i != params_->smoother_plugins.size(); i++) {
+    smoother_ids_concat_ += params_->smoother_plugins[i] + std::string(" ");
   }
 
   RCLCPP_INFO(
@@ -200,28 +197,6 @@ SmootherServer::on_cleanup(const rclcpp_lifecycle::State &)
   return nav2::CallbackReturn::SUCCESS;
 }
 
-void SmootherServer::updateFootprintSubscriber()
-{
-  if (params_->footprint_topic == footprint_topic_ &&
-    params_->robot_base_frame == robot_base_frame_ &&
-    params_->transform_tolerance == transform_tolerance_)
-  {
-    return;
-  }
-
-  RCLCPP_INFO(
-    get_logger(), "Footprint parameters changed, recreating footprint subscriber on topic '%s'",
-    params_->footprint_topic.c_str());
-  footprint_topic_ = params_->footprint_topic;
-  robot_base_frame_ = params_->robot_base_frame;
-  transform_tolerance_ = params_->transform_tolerance;
-  footprint_sub_ = std::make_shared<nav2_costmap_2d::FootprintSubscriber>(
-    shared_from_this(), footprint_topic_, *tf_, robot_base_frame_, transform_tolerance_);
-  collision_checker_ =
-    std::make_shared<nav2_costmap_2d::CostmapTopicCollisionChecker>(
-    *costmap_sub_, *footprint_sub_, this->get_name());
-}
-
 nav2::CallbackReturn
 SmootherServer::on_shutdown(const rclcpp_lifecycle::State &)
 {
@@ -282,9 +257,6 @@ void SmootherServer::smoothPlan()
 
   auto result = std::make_shared<Action::Result>();
   try {
-    std::lock_guard<std::mutex> lock_reinit(param_handler_->getMutex());
-    updateFootprintSubscriber();
-
     auto goal = action_server_->get_current_goal();
     if (!goal) {
       return;  //  if action_server_ is deactivate, goal would be a nullptr
