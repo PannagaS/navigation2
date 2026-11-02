@@ -20,6 +20,7 @@
 #include <string>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <queue>
 #include <utility>
 
@@ -34,7 +35,6 @@
 #include "tf2/utils.hpp"
 #include "nav2_ros_common/tf2_factories.hpp"
 #include "nav2_ros_common/lifecycle_node.hpp"
-#include "nav2_smoother/simple_smoother_parameter_handler.hpp"
 
 namespace nav2_smoother
 {
@@ -122,11 +122,38 @@ protected:
     geometry_msgs::msg::PoseStamped & msg, const unsigned int dim,
     const double & value);
 
-  int refinement_ctr_;
-  SimpleSmootherParameters * params_;
-  std::unique_ptr<SimpleSmootherParameterHandler> param_handler_;
+  /**
+   * @brief Callback executed when a parameter change is detected
+   * This callback is triggered when one or more parameters are about to be updated.
+   * It checks the validity of parameter values and rejects updates that would lead
+   * to invalid or inconsistent configurations, or that arrive while smoothing is
+   * in progress
+   * @param parameters List of parameters that are being updated.
+   * @return rcl_interfaces::msg::SetParametersResult Result indicating whether the update is accepted.
+   */
+  rcl_interfaces::msg::SetParametersResult validateParameterUpdatesCallback(
+    const std::vector<rclcpp::Parameter> & parameters);
+
+  /**
+   * @brief Apply parameter updates after validation
+   * This callback is executed when parameters have been successfully updated.
+   * It updates the internal configuration of the smoother with the new parameter values.
+   * @param parameters List of parameters that have been updated.
+   */
+  void updateParametersCallback(const std::vector<rclcpp::Parameter> & parameters);
+
+  double tolerance_, data_w_, smooth_w_;
+  int max_its_, refinement_ctr_, refinement_num_;
+  bool do_refinement_, enforce_path_inversion_;
+  std::string plugin_name_;
+  nav2::LifecycleNode::WeakPtr node_;
+  std::mutex mutex_;
   std::shared_ptr<nav2_costmap_2d::CostmapSubscriber> costmap_sub_;
   rclcpp::Logger logger_{rclcpp::get_logger("SimpleSmoother")};
+
+  // Dynamic parameters handler
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr on_set_params_handler_;
+  rclcpp::node_interfaces::PostSetParametersCallbackHandle::SharedPtr post_set_params_handler_;
 };
 
 }  // namespace nav2_smoother

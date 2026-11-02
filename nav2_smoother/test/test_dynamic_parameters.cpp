@@ -23,7 +23,7 @@
 
 #include "gtest/gtest.h"
 #include "nav2_ros_common/lifecycle_node.hpp"
-#include "nav2_smoother/simple_smoother_parameter_handler.hpp"
+#include "nav2_smoother/simple_smoother.hpp"
 #include "nav2_smoother/savitzky_golay_smoother_parameter_handler.hpp"
 #include "nav2_smoother/smoother_server_parameter_handler.hpp"
 #include "rclcpp/executors.hpp"
@@ -34,16 +34,23 @@
 #include "rcl_interfaces/msg/set_parameters_result.hpp"
 
 
+class SimpleSmootherWrapper : public nav2_smoother::SimpleSmoother
+{
+public:
+  double getTolerance() {return tolerance_;}
+  int getMaxIts() {return max_its_;}
+  double getDataW() {return data_w_;}
+  double getSmoothW() {return smooth_w_;}
+  bool getDoRefinement() {return do_refinement_;}
+  std::mutex & getMutex() {return mutex_;}
+};
+
 TEST(SimpleSmootherParamTest, test_dynamic_parameters)
 {
-  std::string nodeName = "test_node";
-  auto node = std::make_shared<nav2::LifecycleNode>(nodeName);
-  std::string plugin_name = "test";
-  auto logger = node->get_logger();
-  auto param_handler = std::make_unique<nav2_smoother::SimpleSmootherParameterHandler>(
-    node, plugin_name, logger);
-  param_handler->activate();
-  auto params = param_handler->getParams();
+  auto node = std::make_shared<nav2::LifecycleNode>("test_node");
+  auto smoother = std::make_unique<SimpleSmootherWrapper>();
+  smoother->configure(node, "test", nullptr, nullptr, nullptr);
+  smoother->activate();
 
   auto rec_param = std::make_shared<rclcpp::AsyncParametersClient>(
     node->get_node_base_interface(), node->get_node_topics_interface(),
@@ -57,71 +64,71 @@ TEST(SimpleSmootherParamTest, test_dynamic_parameters)
       rclcpp::Parameter("test.do_refinement", false)});
   rclcpp::spin_until_future_complete(node->get_node_base_interface(), results);
 
-  rclcpp::spin_until_future_complete(
-    node->get_node_base_interface(),
-    results);
-
-  EXPECT_EQ(params->tolerance, 0.5);
-  EXPECT_EQ(params->max_its, 10);
-  EXPECT_FALSE(params->do_refinement);
+  EXPECT_EQ(smoother->getTolerance(), 0.5);
+  EXPECT_EQ(smoother->getMaxIts(), 10);
+  EXPECT_FALSE(smoother->getDoRefinement());
 
   // Invalid tolerance is rejected, value unchanged
   results = rec_param->set_parameters_atomically(
     {rclcpp::Parameter("test.tolerance", -1.0)});
   rclcpp::spin_until_future_complete(node->get_node_base_interface(), results);
-  EXPECT_EQ(params->tolerance, 0.5);
+  EXPECT_EQ(smoother->getTolerance(), 0.5);
+  EXPECT_EQ(node->get_parameter("test.tolerance").as_double(), 0.5);
 
   // Invalid max_its is rejected, value unchanged
   results = rec_param->set_parameters_atomically(
     {rclcpp::Parameter("test.max_its", 0)});
   rclcpp::spin_until_future_complete(node->get_node_base_interface(), results);
-  EXPECT_EQ(params->max_its, 10);
+  EXPECT_EQ(smoother->getMaxIts(), 10);
 
   // Negative weight is rejected, default unchanged
   results = rec_param->set_parameters_atomically(
     {rclcpp::Parameter("test.w_data", -0.1)});
   rclcpp::spin_until_future_complete(node->get_node_base_interface(), results);
-  EXPECT_EQ(params->w_data, 0.2);
+  EXPECT_EQ(smoother->getDataW(), 0.2);
 
   // Zero weight is valid
   results = rec_param->set_parameters_atomically(
     {rclcpp::Parameter("test.w_smooth", 0.0)});
   rclcpp::spin_until_future_complete(node->get_node_base_interface(), results);
-  EXPECT_EQ(params->w_smooth, 0.0);
-}
+  EXPECT_EQ(smoother->getSmoothW(), 0.0);
 
+  smoother->deactivate();
+}
 
 TEST(SimpleSmootherParamTest, test_reject_while_smoothing)
 {
   auto node = std::make_shared<nav2::LifecycleNode>("test_node");
-  std::string plugin_name = "test";
-  auto logger = node->get_logger();
-  auto param_handler = std::make_unique<nav2_smoother::SimpleSmootherParameterHandler>(
-    node, plugin_name, logger);
-  param_handler->activate();
-  auto params = param_handler->getParams();
+  auto smoother = std::make_unique<SimpleSmootherWrapper>();
+  smoother->configure(node, "test", nullptr, nullptr, nullptr);
+  smoother->activate();
 
   auto rec_param = std::make_shared<rclcpp::AsyncParametersClient>(
     node->get_node_base_interface(), node->get_node_topics_interface(),
     node->get_node_graph_interface(),
     node->get_node_services_interface());
 
-  // A second thread holds the handler mutex, standing in for a smooth() in progress
+  // A second thread holds the smoother mutex, standing in for a smooth() in progress.
+  // The handshake on `locked` guarantees the lock is held before we send the update.
+  std::atomic<bool> locked{false};
   std::atomic<bool> release{false};
   std::thread holder([&]() {
-      std::lock_guard<std::mutex> lock(param_handler->getMutex());
+      std::lock_guard<std::mutex> lock(smoother->getMutex());
+      locked = true;
       while (!release) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
     });
-  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  while (!locked) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
 
   // Update arrives while "smoothing": must be rejected, value unchanged
   auto results = rec_param->set_parameters_atomically(
     {rclcpp::Parameter("test.tolerance", 0.5)});
   rclcpp::spin_until_future_complete(node->get_node_base_interface(), results);
   EXPECT_FALSE(results.get().successful);
-  EXPECT_EQ(params->tolerance, 1e-10);
+  EXPECT_EQ(smoother->getTolerance(), 1e-10);
 
   // "Smoothing" finishes
   release = true;
@@ -132,7 +139,9 @@ TEST(SimpleSmootherParamTest, test_reject_while_smoothing)
     {rclcpp::Parameter("test.tolerance", 0.5)});
   rclcpp::spin_until_future_complete(node->get_node_base_interface(), results);
   EXPECT_TRUE(results.get().successful);
-  EXPECT_EQ(params->tolerance, 0.5);
+  EXPECT_EQ(smoother->getTolerance(), 0.5);
+
+  smoother->deactivate();
 }
 
 TEST(SavitzkyGolayParamTest, test_dynamic_parameters)

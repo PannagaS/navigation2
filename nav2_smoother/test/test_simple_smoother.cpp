@@ -39,7 +39,7 @@ public:
 
   void setMaxItsToInvalid()
   {
-    params_->max_its = 0;
+    max_its_ = 0;
   }
 };
 
